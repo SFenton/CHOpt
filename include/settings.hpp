@@ -72,6 +72,7 @@ struct Settings {
     Game game;
     PathingSettings pathing_settings;
     float opacity;
+    bool output_json;
 };
 
 // Parses the command line options.

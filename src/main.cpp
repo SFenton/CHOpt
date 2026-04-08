@@ -26,6 +26,7 @@
 #include <sightread/time.hpp>
 
 #include "image.hpp"
+#include "jsonexport.hpp"
 #include "optimiser.hpp"
 #include "settings.hpp"
 #include "songfile.hpp"
@@ -47,10 +48,24 @@ int main(int argc, char** argv)
         const auto& track
             = song.track(settings.instrument, settings.difficulty);
         const std::atomic<bool> terminate {false};
+        std::string path_summary_text;
         const auto builder = make_builder(
-            song, track, settings, [&](auto p) { q_stdout << p << '\n'; },
+            song, track, settings,
+            [&](auto p) {
+                path_summary_text += p;
+                path_summary_text += '\n';
+                if (!settings.output_json) {
+                    q_stdout << p << '\n';
+                }
+            },
             &terminate);
         q_stdout.flush();
+        if (settings.output_json) {
+            const auto json
+                = export_builder_as_json(builder, path_summary_text);
+            q_stdout << json.c_str() << '\n';
+            q_stdout.flush();
+        }
         if (settings.draw_image) {
             const Image image {builder};
             image.save(settings.image_path.c_str());

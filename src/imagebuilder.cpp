@@ -709,6 +709,176 @@ void ImageBuilder::set_total_score(const PointSet& points,
     m_total_score = no_sp_score + path.score_boost;
 }
 
+void ImageBuilder::compute_per_note_data(
+    const PointSet& points, const SpData& sp_data, const SpTimeMap& time_map,
+    const Path& path, const SpEngineValues& sp_engine_values)
+{
+    m_note_score_data.clear();
+
+    // Build a sorted event timeline to track cumulative score and OD.
+    // We only emit NoteScoreData at the beat where each activation starts
+    // (including all chord notes at that beat).
+    enum class EventType : std::uint8_t {
+        NotePoint,
+        ActStart,
+        ActEnd,
+        WhammyEnd,
+        SpPhrase,
+        UnisonPhrase
+    };
+
+    std::vector<std::tuple<SightRead::Beat, EventType, std::size_t>> events;
+
+    // Add note-point events (store index into PointSet)
+    {
+        std::size_t idx = 0;
+        for (auto p = points.cbegin(); p < points.cend(); ++p, ++idx) {
+            events.emplace_back(p->position.beat, EventType::NotePoint, idx);
+        }
+    }
+
+    // Add SP phrase events
+    for (auto p = points.cbegin(); p < points.cend(); ++p) {
+        if (!p->is_sp_granting_note) {
+            continue;
+        }
+        auto position = p->position.beat;
+        for (const auto& act : path.activations) {
+            if (p > act.act_end) {
+                position = std::max(position, act.sp_end);
+            }
+        }
+        if (p->is_unison_sp_granting_note) {
+            events.emplace_back(position, EventType::UnisonPhrase, 0);
+        } else {
+            events.emplace_back(position, EventType::SpPhrase, 0);
+        }
+    }
+
+    // Add activation events
+    for (const auto& act : path.activations) {
+        if (act.whammy_end < act.sp_end) {
+            events.emplace_back(act.whammy_end, EventType::WhammyEnd, 0);
+        }
+        events.emplace_back(act.sp_start, EventType::ActStart, 0);
+        events.emplace_back(act.sp_end, EventType::ActEnd, 0);
+    }
+
+    std::ranges::sort(events, [](const auto& a, const auto& b) {
+        return std::get<0>(a) < std::get<0>(b);
+    });
+
+    // Build set of activation start beats for O(1) lookup
+    constexpr double BEAT_EPSILON = 0.01;
+    std::vector<double> act_start_beats;
+    act_start_beats.reserve(path.activations.size());
+    for (const auto& act : path.activations) {
+        act_start_beats.push_back(act.sp_start.value());
+    }
+
+    // Pre-compute which points are inside an activation for score doubling
+    std::vector<bool> point_in_activation(
+        static_cast<std::size_t>(
+            std::distance(points.cbegin(), points.cend())),
+        false);
+    for (const auto& act : path.activations) {
+        for (auto p = act.act_start; p <= act.act_end; ++p) {
+            auto idx = static_cast<std::size_t>(
+                std::distance(points.cbegin(), p));
+            point_in_activation.at(idx) = true;
+        }
+    }
+
+    // Walk events
+    auto is_sp_active = false;
+    SightRead::Beat whammy_end {std::numeric_limits<double>::infinity()};
+    SightRead::Beat position {0.0};
+    double total_sp = 0.0;
+    int cumulative_score = 0;
+    int current_activation = -1;
+
+    for (const auto& [event_pos, event_type, event_idx] : events) {
+        // Propagate SP drain/gain
+        if (is_sp_active) {
+            SpPosition start_pos {.beat = position,
+                                  .sp_measure
+                                  = time_map.to_sp_measures(position)};
+            SpPosition end_pos {.beat = event_pos,
+                                .sp_measure
+                                = time_map.to_sp_measures(event_pos)};
+            SpPosition whammy_pos {.beat = SightRead::Beat {0.0},
+                                   .sp_measure = SpMeasure {0.0}};
+            if (m_overlap_engine) {
+                whammy_pos
+                    = {.beat = whammy_end,
+                       .sp_measure = time_map.to_sp_measures(whammy_end)};
+            }
+            total_sp = sp_data.propagate_sp_over_whammy_min(
+                start_pos, end_pos, total_sp, whammy_pos);
+        } else if (whammy_end > position) {
+            total_sp += sp_data.available_whammy(
+                position, std::min(event_pos, whammy_end));
+        }
+
+        switch (event_type) {
+        case EventType::NotePoint: {
+            auto p = points.cbegin()
+                + static_cast<std::ptrdiff_t>(event_idx);
+            int note_value = p->value;
+            if (point_in_activation.at(event_idx)) {
+                note_value += p->value;
+            }
+            cumulative_score += note_value;
+            // Emit only if this note is at an activation start beat
+            if (current_activation >= 0
+                && current_activation
+                    < static_cast<int>(act_start_beats.size())) {
+                const auto act_beat
+                    = act_start_beats.at(
+                        static_cast<std::size_t>(current_activation));
+                if (std::abs(event_pos.value() - act_beat) < BEAT_EPSILON
+                    || event_pos.value() < act_beat + BEAT_EPSILON) {
+                    // Check if this is the first non-hold point at this beat
+                    // or a chord member (same beat)
+                    if (!p->is_hold_point) {
+                        m_note_score_data.push_back(
+                            {.beat = event_pos.value(),
+                             .cumulative_score = cumulative_score,
+                             .note_value = note_value,
+                             .od_percent
+                             = std::clamp(total_sp, 0.0, 1.0),
+                             .is_sp_granting = p->is_sp_granting_note,
+                             .activation_index = current_activation});
+                    }
+                }
+            }
+            break;
+        }
+        case EventType::ActStart:
+            is_sp_active = true;
+            ++current_activation;
+            break;
+        case EventType::ActEnd:
+            is_sp_active = false;
+            whammy_end
+                = SightRead::Beat {std::numeric_limits<double>::infinity()};
+            total_sp = 0.0;
+            break;
+        case EventType::SpPhrase:
+            total_sp += sp_engine_values.phrase_amount;
+            break;
+        case EventType::UnisonPhrase:
+            total_sp += sp_engine_values.unison_phrase_amount;
+            break;
+        case EventType::WhammyEnd:
+            whammy_end = event_pos;
+            break;
+        }
+        position = event_pos;
+        total_sp = std::clamp(total_sp, 0.0, 1.0);
+    }
+}
+
 ImageBuilder make_builder(SightRead::Song& song,
                           const SightRead::NoteTrack& track,
                           const Settings& settings,
@@ -797,6 +967,9 @@ ImageBuilder make_builder(SightRead::Song& song,
             settings.pathing_settings.engine->sp_engine_values());
     }
     builder.set_total_score(processed_track.points(), solos, path);
+    builder.compute_per_note_data(
+        processed_track.points(), processed_track.sp_data(), time_map, path,
+        settings.pathing_settings.engine->sp_engine_values());
     if (settings.pathing_settings.engine->has_bres()) {
         const auto& bres = new_track.bres();
         if (!bres.empty()) {

@@ -166,6 +166,7 @@ std::unique_ptr<QCommandLineParser> arg_parser()
          {{"p", "precision-mode"}, "Turn on precision mode for CH."},
          {{"b", "blank"}, "Give a blank chart image."},
          {"no-image", "Do not create an image."},
+         {"json", "Output path data as JSON to stdout."},
          {"no-bpms", "Do not draw BPMs."},
          {"no-solos", "Do not draw solo sections."},
          {"no-time-sigs", "Do not draw time signatures."},
@@ -264,6 +265,7 @@ Settings from_args(const QStringList& args, QTextStream& std_err)
 
     settings.is_lefty_flip = parser->isSet("lefty-flip");
     settings.draw_image = !parser->isSet("no-image");
+    settings.output_json = parser->isSet("json");
     settings.draw_bpms = !parser->isSet("no-bpms");
     settings.draw_solos = !parser->isSet("no-solos");
     settings.draw_time_sigs = !parser->isSet("no-time-sigs");

@@ -1,0 +1,44 @@
+# Build CHOpt CLI for Linux x64 (Ubuntu 24.04 Noble — matches FSTService runtime)
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git ca-certificates gpg wget \
+    qt6-base-dev libgl-dev \
+    libboost-dev libboost-locale-dev libboost-test-dev \
+    libpng-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CMake >= 3.30 from Kitware APT repo (Ubuntu 24.04 ships 3.28)
+RUN wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc | gpg --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg \
+    && echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' > /etc/apt/sources.list.d/kitware.list \
+    && apt-get update && apt-get install -y --no-install-recommends cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . /build/
+
+RUN git submodule update --init --recursive 2>/dev/null || true
+
+RUN cmake -B out -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_GUI=OFF -DPACKAGE_TESTS=OFF \
+    && cmake --build out --config Release --target chopt -j$(nproc)
+
+# Collect binary + Qt6 runtime libs
+RUN mkdir -p /output/libs \
+    && cp out/chopt /output/CHOpt \
+    && chmod +x /output/CHOpt \
+    # Copy Qt6 runtime libraries needed at runtime
+    && for lib in libQt6Core.so.6 libQt6DBus.so.6 libQt6Gui.so.6; do \
+         find /usr/lib -name "$lib" -exec cp {} /output/libs/ \; ; \
+       done \
+    # Copy ICU libraries needed by Qt6
+    && for lib in libicudata.so libicui18n.so libicuuc.so; do \
+         find /usr/lib -name "${lib}*" -exec cp -P {} /output/libs/ \; ; \
+       done
+
+# Verify the binary runs
+RUN /output/CHOpt --version || true
+
+# ── Extract stage ──
+FROM scratch AS export
+COPY --from=builder /output/ /

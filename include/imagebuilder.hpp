@@ -48,6 +48,17 @@ struct DrawnNote {
     bool is_sp_note;
 };
 
+// Per-note scoring and OD data for structured export.
+// Only emitted for activation start notes.
+struct NoteScoreData {
+    double beat;
+    int cumulative_score;
+    int note_value;
+    double od_percent;
+    bool is_sp_granting;
+    int activation_index;
+};
+
 class ImageBuilder {
 private:
     SightRead::TrackType m_track_type;
@@ -79,6 +90,7 @@ private:
     float m_activation_opacity {0.33F};
     int m_total_score {0};
     bool m_overlap_engine {true};
+    std::vector<NoteScoreData> m_note_score_data;
 
     void form_beat_lines(const SightRead::TempoMap& tempo_map);
     static bool is_neutralised_phrase(SightRead::Beat note_pos,
@@ -119,6 +131,11 @@ public:
     void set_total_score(const PointSet& points,
                          const std::vector<SightRead::Solo>& solos,
                          const Path& path);
+    void compute_per_note_data(const PointSet& points,
+                               const SpData& sp_data,
+                               const SpTimeMap& time_map,
+                               const Path& path,
+                               const SpEngineValues& sp_engine_values);
 
     [[nodiscard]] const std::string& artist() const { return m_artist; }
     [[nodiscard]] const std::vector<int>& base_values() const
@@ -220,6 +237,10 @@ public:
     }
     float& activation_opacity() { return m_activation_opacity; }
     [[nodiscard]] int total_score() const { return m_total_score; }
+    [[nodiscard]] const std::vector<NoteScoreData>& note_score_data() const
+    {
+        return m_note_score_data;
+    }
     [[nodiscard]] SightRead::Difficulty difficulty() const
     {
         return m_difficulty;

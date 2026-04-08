@@ -22,12 +22,15 @@ endfunction()
 function(set_warnings target)
   target_compile_options(
     ${target}
-    PRIVATE $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:
+    PRIVATE $<$<CXX_COMPILER_ID:Clang,AppleClang>:
     -Wall
     -Wextra
     -Werror
     -Wno-c++98-compat
     -Wno-unknown-warning-option>
+    $<$<CXX_COMPILER_ID:GNU>:
+    -Wall
+    -Wextra>
     $<$<CXX_COMPILER_ID:MSVC>:
     /W4
     /WX>)
@@ -62,6 +65,7 @@ add_executable(
   src/main.cpp
   src/image.cpp
   src/imagebuilder.cpp
+  src/jsonexport.cpp
   src/optimiser.cpp
   src/points.cpp
   src/processed.cpp
