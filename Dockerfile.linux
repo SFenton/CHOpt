@@ -34,7 +34,9 @@ RUN mkdir -p /output/libs \
     # Copy ICU libraries needed by Qt6
     && for lib in libicudata.so libicui18n.so libicuuc.so; do \
          find /usr/lib -name "${lib}*" -exec cp -P {} /output/libs/ \; ; \
-       done
+       done \
+    # Copy Boost.Locale needed at runtime
+    && find /usr/lib -name "libboost_locale.so*" -exec cp -P {} /output/libs/ \;
 
 # Verify the binary runs
 RUN /output/CHOpt --version || true

@@ -61,8 +61,9 @@ int main(int argc, char** argv)
             &terminate);
         q_stdout.flush();
         if (settings.output_json) {
+            const auto& tempo_map = song.global_data().tempo_map();
             const auto json
-                = export_builder_as_json(builder, path_summary_text);
+                = export_builder_as_json(builder, path_summary_text, &tempo_map);
             q_stdout << json.c_str() << '\n';
             q_stdout.flush();
         }

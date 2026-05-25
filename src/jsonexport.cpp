@@ -25,14 +25,28 @@
 #include "jsonexport.hpp"
 
 namespace {
+
+double beat_to_secs(const SightRead::TempoMap* tm, double beat)
+{
+    if (tm == nullptr) {
+        return -1.0;
+    }
+    return tm->to_seconds(SightRead::Beat {beat}).value();
+}
+
 QJsonArray range_array(
-    const std::vector<std::tuple<double, double>>& ranges)
+    const std::vector<std::tuple<double, double>>& ranges,
+    const SightRead::TempoMap* tempo_map = nullptr)
 {
     QJsonArray arr;
     for (const auto& [start, end] : ranges) {
         QJsonObject obj;
         obj["startBeat"] = start;
         obj["endBeat"] = end;
+        if (tempo_map != nullptr) {
+            obj["startSeconds"] = beat_to_secs(tempo_map, start);
+            obj["endSeconds"] = beat_to_secs(tempo_map, end);
+        }
         arr.append(obj);
     }
     return arr;
@@ -83,7 +97,8 @@ const char* difficulty_string(SightRead::Difficulty diff)
 }
 
 std::string export_builder_as_json(const ImageBuilder& builder,
-                                   const std::string& path_summary)
+                                   const std::string& path_summary,
+                                   const SightRead::TempoMap* tempo_map)
 {
     QJsonObject root;
 
@@ -110,6 +125,12 @@ std::string export_builder_as_json(const ImageBuilder& builder,
         if (i + 1 < measures.size()) {
             m["beatEnd"] = measures.at(i + 1);
         }
+        if (tempo_map != nullptr) {
+            m["startSeconds"] = beat_to_secs(tempo_map, measures.at(i));
+            if (i + 1 < measures.size()) {
+                m["endSeconds"] = beat_to_secs(tempo_map, measures.at(i + 1));
+            }
+        }
         m["baseValue"] = base_values.at(i);
         m["cumulativeScore"] = score_values.at(i);
         if (!sp_pct.empty() && i < sp_pct.size()) {
@@ -126,25 +147,25 @@ std::string export_builder_as_json(const ImageBuilder& builder,
     // Built below with startNotes embedded
 
     // ── Squeeze windows (red) ──
-    root["squeezeWindows"] = range_array(builder.red_ranges());
+    root["squeezeWindows"] = range_array(builder.red_ranges(), tempo_map);
 
     // ── SP phrases (green) ──
-    root["spPhrases"] = range_array(builder.green_ranges());
+    root["spPhrases"] = range_array(builder.green_ranges(), tempo_map);
 
     // ── Compressed whammy zones (yellow) ──
-    root["compressedWhammy"] = range_array(builder.yellow_ranges());
+    root["compressedWhammy"] = range_array(builder.yellow_ranges(), tempo_map);
 
     // ── Solo sections ──
-    root["soloSections"] = range_array(builder.solo_ranges());
+    root["soloSections"] = range_array(builder.solo_ranges(), tempo_map);
 
     // ── Unison phrases ──
-    root["unisonPhrases"] = range_array(builder.unison_ranges());
+    root["unisonPhrases"] = range_array(builder.unison_ranges(), tempo_map);
 
     // ── BRE ranges ──
-    root["breRanges"] = range_array(builder.bre_ranges());
+    root["breRanges"] = range_array(builder.bre_ranges(), tempo_map);
 
     // ── Drum fills ──
-    root["drumFills"] = range_array(builder.fill_ranges());
+    root["drumFills"] = range_array(builder.fill_ranges(), tempo_map);
 
     // ── BPMs ──
     {
@@ -177,6 +198,9 @@ std::string export_builder_as_json(const ImageBuilder& builder,
         for (const auto& note : builder.notes()) {
             QJsonObject obj;
             obj["beat"] = note.beat;
+            if (tempo_map != nullptr) {
+                obj["seconds"] = beat_to_secs(tempo_map, note.beat);
+            }
             obj["isSpNote"] = note.is_sp_note;
             QJsonObject frets;
             for (int i = 0; i < 5; ++i) {
@@ -200,6 +224,9 @@ std::string export_builder_as_json(const ImageBuilder& builder,
         for (const auto& [beat, name] : builder.practice_sections()) {
             QJsonObject obj;
             obj["beat"] = beat;
+            if (tempo_map != nullptr) {
+                obj["seconds"] = beat_to_secs(tempo_map, beat);
+            }
             obj["name"] = QString::fromStdString(name);
             sections_arr.append(obj);
         }
@@ -215,6 +242,9 @@ std::string export_builder_as_json(const ImageBuilder& builder,
         for (const auto& nd : note_data) {
             QJsonObject obj;
             obj["beat"] = nd.beat;
+            if (tempo_map != nullptr) {
+                obj["seconds"] = beat_to_secs(tempo_map, nd.beat);
+            }
             obj["cumulativeScore"] = nd.cumulative_score;
             obj["noteValue"] = nd.note_value;
             obj["odPercent"] = nd.od_percent;
@@ -230,9 +260,19 @@ std::string export_builder_as_json(const ImageBuilder& builder,
             QJsonObject obj;
             obj["startBeat"] = start;
             obj["endBeat"] = end;
+            if (tempo_map != nullptr) {
+                obj["startSeconds"] = beat_to_secs(tempo_map, start);
+                obj["endSeconds"] = beat_to_secs(tempo_map, end);
+            }
             auto it = act_start_notes.find(static_cast<int>(i));
             if (it != act_start_notes.end()) {
                 obj["startNotes"] = it->second;
+                // Score the player would have right before hitting the
+                // activation chord (first note's cumulative minus its value).
+                auto first = it->second.at(0).toObject();
+                obj["scoreBeforeActivation"]
+                    = first["cumulativeScore"].toInt()
+                    - first["noteValue"].toInt();
             }
             acts_arr.append(obj);
         }

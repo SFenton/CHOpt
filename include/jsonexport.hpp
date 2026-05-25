@@ -22,11 +22,14 @@
 #include <string>
 
 #include "imagebuilder.hpp"
+#include <sightread/tempomap.hpp>
 
 // Serialise the ImageBuilder state to a JSON string suitable for machine
 // consumption. The output contains per-measure score/OD data, activation
 // ranges, note positions, SP phrases, BPMs, and the path summary fields.
+// When a TempoMap is provided, beat-based positions also include seconds.
 std::string export_builder_as_json(const ImageBuilder& builder,
-                                   const std::string& path_summary);
+                                   const std::string& path_summary,
+                                   const SightRead::TempoMap* tempo_map = nullptr);
 
 #endif
